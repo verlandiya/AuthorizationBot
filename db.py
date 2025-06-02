@@ -6,9 +6,11 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.enums import ParseMode
 from config import ADMIN_ID
 
 router = Router()
+db_name = "auth.db"  # НАЗВАНИЕ БД
 
 
 class Form(StatesGroup):
@@ -16,7 +18,7 @@ class Form(StatesGroup):
 
 
 def create_db():
-    conn = sqlite3.connect("auth.db")  # НАЗВАНИЕ БД
+    conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -67,7 +69,7 @@ async def add_user_cb(cb: CallbackQuery, state: FSMContext):
 @router.message(Form.name)
 async def on_name_input(message: Message, state: FSMContext):
     user_name = message.text
-    conn = sqlite3.connect("auth.db")
+    conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     try:
         await message.answer("Все хорошо, отвечаю")
@@ -80,9 +82,22 @@ async def on_name_input(message: Message, state: FSMContext):
         await state.clear()
 
 
-@router.callback_query(F.data == "list_users")
+@router.callback_query(F.data == "users_list")
 async def users_list_cb(cb: CallbackQuery):
-    pass  # TODO: Сделать эту функцию
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT UserID, Name, TelegramID FROM Users")
+    users = cursor.fetchall()
+
+    if not users:
+        text = "Пользователей нет"
+    else:
+        text = "<b>Список пользователей</b>\n"
+        for user in users:
+            user_id, name, tg_id = user
+            text += f"{user_id}. {name} - {'Активен' if tg_id else 'Неактивен'}"
+    await cb.message.edit_text(text, parse_mode=ParseMode.HTML)
 
 
 async def main():
