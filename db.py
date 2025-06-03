@@ -15,6 +15,7 @@ db_name = "auth.db"  # НАЗВАНИЕ БД
 
 class Form(StatesGroup):
     name = State()
+    user_to_delete = State()
 
 
 def create_db():
@@ -52,6 +53,7 @@ async def users_panel(message: Message):
         build = InlineKeyboardBuilder()
         build.button(text="Добавить пользователя", callback_data="add_user")
         build.button(text="Список пользователей", callback_data="users_list")
+        build.button(text="Удалить пользователя", callback_data="delete_user")
 
         build.adjust(1)
         await message.answer(
@@ -72,7 +74,8 @@ async def on_name_input(message: Message, state: FSMContext):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     try:
-        await message.answer("Все хорошо, отвечаю")
+        cursor.execute("INSERT INTO Users (Name) VALUES (?)", (user_name, ))
+        conn.commit()
         pass  # Тут уже нужна генерация ссылки
     except Exception as err:
         print(f"Произошла ошибка при добавлении пользователя: {err}")
@@ -82,8 +85,7 @@ async def on_name_input(message: Message, state: FSMContext):
         await state.clear()
 
 
-@router.callback_query(F.data == "users_list")
-async def users_list_cb(cb: CallbackQuery):
+def list_of_users() -> str:
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
 
@@ -91,13 +93,80 @@ async def users_list_cb(cb: CallbackQuery):
     users = cursor.fetchall()
 
     if not users:
-        text = "Пользователей нет"
+        return "Нет пользователей"
     else:
         text = "<b>Список пользователей</b>\n"
         for user in users:
             user_id, name, tg_id = user
-            text += f"{user_id}. {name} - {'Активен' if tg_id else 'Неактивен'}"
+            text += f"{user_id}. {name} - {'Активен' if tg_id else 'Неактивен'}\n"
+    return text
+
+
+@router.callback_query(F.data == "users_list")
+async def users_list_cb(cb: CallbackQuery):
+    text = list_of_users()
     await cb.message.edit_text(text, parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data == "delete_user")
+async def delete_user_cb(cb: CallbackQuery, state: FSMContext):
+    text = list_of_users()
+    await cb.message.edit_text(text, parse_mode=ParseMode.HTML)
+    if not(text == "Нет пользователей"):
+        await cb.message.reply("Введите ID пользователя, которого вы хотите удалить")
+        await state.set_state(Form.user_to_delete)
+
+
+@router.message(Form.user_to_delete)
+async def process_delete_user_id(message: Message, state: FSMContext):
+    uid = message.text.strip()
+    if uid.isdigit():
+        uid = int(uid)
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT Name FROM Users WHERE UserID = ?", (uid, ))
+        user = cursor.fetchone()
+        conn.close()
+        if not user:
+            await message.answer(f"Пользователь с ID {uid} не найден")
+            await state.clear()
+        else:
+            build = InlineKeyboardBuilder()
+            build.button(text="Подтвердить", callback_data="confirm_delete")
+            build.button(text="Отмена", callback_data="cancel_delete")
+            build.adjust(1)
+
+            await message.answer(f"Вы действительно хотите удалить пользователя {user[0]}?\n"
+                                 f"ID: {uid}",
+                                 reply_markup=build.as_markup())
+            await state.update_data(user_to_delete=uid)
+    else:
+        await message.answer("Ошибка UserID должен быть числом. Попробуйте снова")
+
+
+@router.callback_query(F.data == "confirm_delete")
+async def delete_confirmation(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    uid = data["user_to_delete"]
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM Users WHERE UserID = ?", (uid, ))
+        cursor.execute("DELETE FROM Auth_links WHERE UserID = ?", (uid, ))
+        conn.commit()
+        await cb.message.edit_text("Пользователь успешно удален")
+    except Exception as err:
+        await cb.message.edit_text("При удалении произошла ошибка")
+        print(f"Ошибка при удалении пользователя {err}")
+    finally:
+        conn.close()
+        await state.clear()
+
+
+@router.callback_query(F.data == "cancel_delete")
+async def cancel_delete_cb(cb: CallbackQuery, state: FSMContext):
+    await cb.message.edit_text("Удаление пользователя отменено")
+    await state.clear()
 
 
 async def main():
